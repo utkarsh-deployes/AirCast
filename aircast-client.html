@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AirCast — Stream PC Audio</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      color: #f1f5f9;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      text-align: center;
+    }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    p { color: #94a3b8; margin-top: 0; margin-bottom: 1rem; }
+    button {
+      background: #2563eb;
+      border: none;
+      color: white;
+      font-size: 1rem;
+      padding: 0.6rem 1.2rem;
+      border-radius: 0.75rem;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    button:hover { background: #1d4ed8; }
+    .status {
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      color: #a5b4fc;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎶 AirCast Receiver</h1>
+  <p>Stream audio from your PC in real-time over Wi-Fi</p>
+
+  <button id="connectBtn">Connect</button>
+  <div class="status" id="status">Idle</div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const btn = document.getElementById("connectBtn");
+    let audioCtx, ws, source;
+
+    btn.onclick = () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+        return;
+      }
+      const wsUrl = `ws://${location.hostname}:8765`;
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        statusEl.textContent = "Connected to AirCast server.";
+        btn.textContent = "Disconnect";
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        source = audioCtx.createBufferSource();
+        playStream(ws);
+      };
+
+      ws.onclose = () => {
+        statusEl.textContent = "Disconnected.";
+        btn.textContent = "Connect";
+      };
+
+      ws.onerror = (err) => {
+        console.error(err);
+        statusEl.textContent = "Connection error.";
+      };
+    };
+
+    function playStream(ws) {
+      const sampleRate = 44100; // match server default
+      const channels = 2;
+      const frameSize = 1024;
+
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const scriptNode = audioCtx.createScriptProcessor(frameSize, 0, channels);
+      const queue = [];
+
+      ws.onmessage = (event) => {
+        queue.push(event.data);
+      };
+
+      scriptNode.onaudioprocess = (e) => {
+        const output = e.outputBuffer;
+        if (queue.length === 0) {
+          for (let c = 0; c < channels; c++)
+            output.getChannelData(c).fill(0);
+          return;
+        }
+
+        const chunk = queue.shift();
+        const dataView = new DataView(chunk);
+        const samples = new Float32Array(chunk.byteLength / 2);
+        for (let i = 0; i < samples.length; i++) {
+          samples[i] = dataView.getInt16(i * 2, true) / 32768;
+        }
+
+        const left = output.getChannelData(0);
+        const right = output.getChannelData(1);
+        for (let i = 0; i < samples.length / 2; i++) {
+          left[i] = samples[i * 2];
+          right[i] = samples[i * 2 + 1];
+        }
+      };
+
+      scriptNode.connect(audioCtx.destination);
+      statusEl.textContent = "Receiving and playing audio...";
+    }
+  </script>
+</body>
+</html>
